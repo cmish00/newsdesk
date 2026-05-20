@@ -5,11 +5,11 @@ Grab the [Latest Release](https://github.com/cmish00/WZN-Ticker/releases/latest)
 
 
 # Previews
-![Cover Image](/assets/images/cover5.gif)
 ![Cover Image](/assets/images/cover.png)
 ![Cover Image](/assets/images/cover2.png)
 ![Cover Image](/assets/images/cover3.png)
 ![Cover Image](/assets/images/cover4.png)
+![Cover Image](/assets/images/cover5.gif)
 
 # Installation
 - Download the required files.
