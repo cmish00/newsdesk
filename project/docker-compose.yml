@@ -15,6 +15,9 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379
       - PORT=3000
+      - AUTH_SECRET=wzn_8f6b7a2e4d91c0a73f5e92b1a86d40c9b7e51f3a24dc8e66
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=admin
     ports:
       - "3000:3000"
     depends_on:

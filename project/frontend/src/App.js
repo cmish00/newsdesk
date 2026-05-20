@@ -8,6 +8,15 @@ const runtimeConfig = window.WZN_CONFIG || {};
 const PANEL_NAME = runtimeConfig.PANEL_NAME || 'NEWS DESK CONTROL PANEL';
 const PANEL_DESC = runtimeConfig.PANEL_DESC || 'Real-Time Ticker & Queue Control Management System';
 const TAB_TITLE = runtimeConfig.TAB_Title || 'CONTROL PANEL';
+const slugify = (value) => String(value || '')
+  .trim()
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, '-')
+  .replace(/^-+|-+$/g, '');
+const slugifyPrefix = (value) => String(value || '')
+  .trim()
+  .replace(/[^a-zA-Z0-9]+/g, '-')
+  .replace(/^-+|-+$/g, '');
 
 function App() {
   useEffect(() => {
@@ -69,13 +78,76 @@ function ColorField({ label, value, onChange, placeholder }) {
   );
 }
 
+function LoginPanel({ onLogin }) {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setError('');
+
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+
+      if (!res.ok) throw new Error('Invalid username or password.');
+
+      const auth = await res.json();
+      localStorage.setItem('wzn_auth', JSON.stringify(auth));
+      onLogin(auth);
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  return (
+    <div className="news-desk auth-page">
+      <section className="desk-card auth-card">
+        <h2>Control Panel Login</h2>
+        <form onSubmit={handleLogin} className="compact-form">
+          <div className="form-group">
+            <label>Username</label>
+            <input type="text" value={username} onChange={e => setUsername(e.target.value)} autoComplete="username" required />
+          </div>
+          <div className="form-group">
+            <label>Password</label>
+            <input type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password" required />
+          </div>
+          {error && <p className="error-text">{error}</p>}
+          <button type="submit" className="btn-primary">Sign In</button>
+        </form>
+      </section>
+    </div>
+  );
+}
+
 function NewsDesk() {
   const navigate = useNavigate();
+  const [auth, setAuth] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('wzn_auth')) || null;
+    } catch (e) {
+      return null;
+    }
+  });
   const [activeTickerId, setActiveTickerId] = useState('');
   const [tickers, setTickers] = useState([]);
+  const [users, setUsers] = useState([]);
+  const [newUsername, setNewUsername] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [newUserRole, setNewUserRole] = useState('user');
+  const [newUserTeam, setNewUserTeam] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [myNewPassword, setMyNewPassword] = useState('');
+  const [passwordMessage, setPasswordMessage] = useState('');
 
   // Form States for Creating/Editing Ticker
   const [newTickerId, setNewTickerId] = useState('');
+  const [tickerScope, setTickerScope] = useState('team');
   const [badge, setBadge] = useState(''); // Empty badge support
   const [badgeType, setBadgeType] = useState('text');
   const [speed, setSpeed] = useState(20);
@@ -96,13 +168,46 @@ function NewsDesk() {
   const [headlinePriority, setHeadlinePriority] = useState('normal');
   const [duration, setDuration] = useState(0); // 0 means never expires
 
+  const user = auth?.user;
+  const tickerSlug = slugify(newTickerId);
+  const canCreateTeamTicker = Boolean(user?.team) && user?.role !== 'admin';
+  const resolvedTickerScope = canCreateTeamTicker && tickerScope !== 'private' ? 'team' : 'private';
+  const tickerPrefix = resolvedTickerScope === 'team'
+    ? slugifyPrefix(user?.team)
+    : slugifyPrefix(user?.username);
+  const finalTickerId = user?.role === 'admin' || !tickerSlug
+    ? tickerSlug
+    : tickerSlug.toLowerCase().startsWith(`${tickerPrefix.toLowerCase()}-`)
+      ? tickerSlug
+      : `${tickerPrefix}-${tickerSlug}`;
+
+  const authFetch = async (url, options = {}) => {
+    const res = await fetch(url, {
+      ...options,
+      headers: {
+        ...(options.headers || {}),
+        Authorization: `Bearer ${auth.token}`
+      }
+    });
+
+    if (res.status === 401) {
+      localStorage.removeItem('wzn_auth');
+      setAuth(null);
+    }
+
+    return res;
+  };
+
   const loadTickers = async () => {
+    if (!auth?.token) return;
     try {
-      const res = await fetch(`${API_BASE}/api/tickers`);
+      const res = await authFetch(`${API_BASE}/api/tickers`);
       const data = await res.json();
       setTickers(data);
       if (data.length > 0 && !activeTickerId) {
         setActiveTickerId(data[0].id);
+      } else if (activeTickerId && !data.some(t => t.id === activeTickerId)) {
+        setActiveTickerId(data[0]?.id || '');
       }
     } catch (e) { console.error(e); }
   };
@@ -116,11 +221,29 @@ function NewsDesk() {
     } catch (e) { console.error(e); }
   };
 
+  const loadUsers = async () => {
+    if (user?.role !== 'admin') return;
+    try {
+      const res = await authFetch(`${API_BASE}/api/users`);
+      const data = await res.json();
+      setUsers(data.map(listUser => ({
+        ...listUser,
+        originalUsername: listUser.username,
+        draftPassword: ''
+      })));
+    } catch (e) { console.error(e); }
+  };
+
   useEffect(() => {
+    if (!auth?.token) return;
     loadTickers();
     socket.on('tickers_updated', loadTickers);
     return () => socket.off('tickers_updated');
-  }, []);
+  }, [auth?.token, activeTickerId]);
+
+  useEffect(() => {
+    if (auth?.token && user?.role === 'admin') loadUsers();
+  }, [auth?.token, user?.role]);
 
   useEffect(() => {
     if (activeTickerId) {
@@ -136,11 +259,12 @@ function NewsDesk() {
   const handleCreateTicker = async (e) => {
     e.preventDefault();
     if (!newTickerId) return;
-    await fetch(`${API_BASE}/api/tickers`, {
+    await authFetch(`${API_BASE}/api/tickers`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        id: newTickerId.toLowerCase().replace(/\\s+/g, '-'),
+        id: finalTickerId,
+        tickerScope: resolvedTickerScope,
         badge, badgeType, speed, colorBg, colorText, colorBadgeBg, colorBadgeText, colorRegion, fontFamily
       })
     });
@@ -149,7 +273,7 @@ function NewsDesk() {
 
   const handleDeleteTicker = async (id) => {
     if (window.confirm(`Delete entirely new ticker "${id}"?`)) {
-      await fetch(`${API_BASE}/api/tickers/${id}`, { method: 'DELETE' });
+      await authFetch(`${API_BASE}/api/tickers/${id}`, { method: 'DELETE' });
       if (activeTickerId === id) setActiveTickerId('');
     }
   };
@@ -159,7 +283,7 @@ function NewsDesk() {
     if (!headlineText || !activeTickerId) return;
     const category = headlineCategory === '__custom__' ? headlineCustomCategory.trim() : headlineCategory;
 
-    await fetch(`${API_BASE}/api/headlines`, {
+    await authFetch(`${API_BASE}/api/headlines`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -175,7 +299,7 @@ function NewsDesk() {
   };
 
   const handleDeleteHeadline = async (headlineId) => {
-    await fetch(`${API_BASE}/api/tickers/${activeTickerId}/headlines/${headlineId}`, {
+    await authFetch(`${API_BASE}/api/tickers/${activeTickerId}/headlines/${headlineId}`, {
       method: 'DELETE'
     });
   };
@@ -195,7 +319,7 @@ function NewsDesk() {
     setSelectedTickerHeadlines(reordered);
 
     try {
-      const res = await fetch(`${API_BASE}/api/tickers/${activeTickerId}/headlines/order`, {
+      const res = await authFetch(`${API_BASE}/api/tickers/${activeTickerId}/headlines/order`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ headlineIds: reordered.map(headline => headline.id) })
@@ -209,18 +333,115 @@ function NewsDesk() {
 
   const toggleEmergency = async (id, currentMode) => {
     const active = currentMode !== 'emergency alert';
-    await fetch(`${API_BASE}/api/tickers/${id}/emergency`, {
+    await authFetch(`${API_BASE}/api/tickers/${id}/emergency`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ active })
     });
   };
 
+  const handleCreateUser = async (e) => {
+    e.preventDefault();
+    const res = await authFetch(`${API_BASE}/api/users`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: newUsername, password: newPassword, role: newUserRole, team: newUserTeam })
+    });
+
+    if (res.ok) {
+      setNewUsername('');
+      setNewPassword('');
+      setNewUserRole('user');
+      setNewUserTeam('');
+      loadUsers();
+    }
+  };
+
+  const handleUpdateUser = async (listUser) => {
+    const res = await authFetch(`${API_BASE}/api/users/${listUser.originalUsername}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: listUser.username,
+        team: listUser.team || '',
+        role: listUser.role,
+        password: listUser.draftPassword || undefined
+      })
+    });
+    if (res.ok) {
+      loadUsers();
+      loadTickers();
+    } else {
+      const data = await res.json().catch(() => ({ error: 'Unable to update team.' }));
+      window.alert(data.error || 'Unable to update team.');
+      loadUsers();
+    }
+  };
+
+  const handleUpdateOwnPassword = async (e) => {
+    e.preventDefault();
+    setPasswordMessage('');
+
+    const res = await authFetch(`${API_BASE}/api/auth/password`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ currentPassword, newPassword: myNewPassword })
+    });
+
+    if (res.ok) {
+      setCurrentPassword('');
+      setMyNewPassword('');
+      setPasswordMessage('Password updated.');
+    } else {
+      const data = await res.json().catch(() => ({ error: 'Unable to update password.' }));
+      setPasswordMessage(data.error || 'Unable to update password.');
+    }
+  };
+
+  const handleDeleteUser = async (username) => {
+    if (!window.confirm(`Delete user "${username}"?`)) return;
+    const res = await authFetch(`${API_BASE}/api/users/${username}`, { method: 'DELETE' });
+    if (res.ok) loadUsers();
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('wzn_auth');
+    setAuth(null);
+    setActiveTickerId('');
+    setTickers([]);
+    setUsers([]);
+  };
+
+  if (!auth?.token) {
+    return <LoginPanel onLogin={setAuth} />;
+  };
+
+  const tickerGroups = tickers.reduce((groups, ticker) => {
+    const groupName = ticker.team || 'No Team / Private';
+    if (!groups[groupName]) groups[groupName] = [];
+    groups[groupName].push(ticker);
+    return groups;
+  }, {});
+  const sortedTickerGroups = Object.entries(tickerGroups)
+    .sort(([a], [b]) => {
+      if (a === 'No Team / Private') return 1;
+      if (b === 'No Team / Private') return -1;
+      return a.localeCompare(b);
+    })
+    .map(([teamName, teamTickers]) => [
+      teamName,
+      teamTickers.sort((a, b) => a.id.localeCompare(b.id))
+    ]);
+
   return (
     <div className="news-desk dark-theme">
       <header className="desk-header">
         <h1>🎙️ {PANEL_NAME}</h1>
         <p>{PANEL_DESC}</p>
+        <div className="session-actions">
+          <span>{user.username} | {user.role}</span>
+          <button type="button" className="btn-warn" onClick={handleLogout}>Sign Out</button>
+        </div>
       </header>
 
       <div className="dashboard-grid">
@@ -230,7 +451,18 @@ function NewsDesk() {
             <div className="form-group">
               <label>Ticker ID / Slug (Becomes your URL)</label>
               <input type="text" placeholder="e.g. main-broadcast" value={newTickerId} onChange={e => setNewTickerId(e.target.value)} required />
+              {finalTickerId && <div className="slug-preview">Final URL: /{finalTickerId}</div>}
             </div>
+
+            {canCreateTeamTicker && (
+              <div className="form-group">
+                <label>Ticker Visibility</label>
+                <select value={tickerScope} onChange={e => setTickerScope(e.target.value)}>
+                  <option value="team">Team Shared ({user.team})</option>
+                  <option value="private">Private ({user.username})</option>
+                </select>
+              </div>
+            )}
 
             <div className="form-row">
               <div className="form-group">
@@ -304,18 +536,26 @@ function NewsDesk() {
 
           <div className="ticker-list">
             <h3>Active System Tickers</h3>
-            {tickers.map(t => (
-              <div key={t.id} className={`ticker-list-item ${activeTickerId === t.id ? 'selected' : ''}`} onClick={() => setActiveTickerId(t.id)}>
-                <div>
-                  <strong>/{t.id}</strong> <span className="small-badge" style={{backgroundColor: t.colorBadgeBg, color: t.colorBadgeText}}>{t.badge}</span>
-                  <div className="speed-text">Speed: {t.speed} | Font: {t.fontFamily}</div>
-                </div>
-                <div className="item-actions" onClick={e => e.stopPropagation()}>
-                  <button className={t.mode === 'emergency alert' ? 'btn-danger flashing' : 'btn-warn'} onClick={() => toggleEmergency(t.id, t.mode)}>
-                    {t.mode === 'emergency alert' ? 'REMOVE OVERRIDE' : '🚨 EMERGENCY'}
-                  </button>
-                  <button className="btn-delete" onClick={() => handleDeleteTicker(t.id)}>❌</button>
-                </div>
+            {sortedTickerGroups.map(([teamName, teamTickers]) => (
+              <div key={teamName} className="ticker-team-group">
+                <div className="ticker-team-heading">{teamName}</div>
+                {teamTickers.map(t => (
+                  <div key={t.id} className={`ticker-list-item ${activeTickerId === t.id ? 'selected' : ''}`} onClick={() => setActiveTickerId(t.id)}>
+                    <div>
+                      <strong>/{t.id}</strong> <span className="small-badge" style={{backgroundColor: t.colorBadgeBg, color: t.colorBadgeText}}>{t.badge}</span>
+                      <div className="speed-text">
+                        Speed: {t.speed} | Font: {t.fontFamily}
+                        {user.role === 'admin' && t.owner ? ` | Owner: ${t.owner}` : ''}
+                      </div>
+                    </div>
+                    <div className="item-actions" onClick={e => e.stopPropagation()}>
+                      <button className={t.mode === 'emergency alert' ? 'btn-danger flashing' : 'btn-warn'} onClick={() => toggleEmergency(t.id, t.mode)}>
+                        {t.mode === 'emergency alert' ? 'REMOVE OVERRIDE' : 'EMERGENCY'}
+                      </button>
+                      <button className="btn-delete" onClick={() => handleDeleteTicker(t.id)}>X</button>
+                    </div>
+                  </div>
+                ))}
               </div>
             ))}
           </div>
@@ -406,6 +646,128 @@ function NewsDesk() {
                     {hl.text.toUpperCase()}
                   </div>
                   <button className="btn-delete" onClick={() => handleDeleteHeadline(hl.id)}>❌</button>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        <section className="desk-card">
+          <h2>My Password</h2>
+          <form onSubmit={handleUpdateOwnPassword} className="compact-form">
+            <div className="form-row">
+              <div className="form-group">
+                <label>Current Password</label>
+                <input
+                  type="password"
+                  value={currentPassword}
+                  onChange={e => setCurrentPassword(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="form-group">
+                <label>New Password</label>
+                <input
+                  type="password"
+                  value={myNewPassword}
+                  onChange={e => setMyNewPassword(e.target.value)}
+                  required
+                />
+              </div>
+            </div>
+            {passwordMessage && <p className="status-text">{passwordMessage}</p>}
+            <button type="submit" className="btn-primary">Update Password</button>
+          </form>
+        </section>
+
+        {user.role === 'admin' && (
+          <section className="desk-card">
+            <h2>User Management</h2>
+            <form onSubmit={handleCreateUser} className="compact-form">
+              <div className="form-row">
+                <div className="form-group">
+                  <label>Username</label>
+                  <input type="text" value={newUsername} onChange={e => setNewUsername(e.target.value)} required />
+                </div>
+                <div className="form-group">
+                  <label>Password</label>
+                  <input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} required />
+                </div>
+                <div className="form-group">
+                  <label>Role</label>
+                  <select value={newUserRole} onChange={e => setNewUserRole(e.target.value)}>
+                    <option value="user">User</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>Team</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. newsroom"
+                    value={newUserTeam}
+                    onChange={e => setNewUserTeam(e.target.value)}
+                  />
+                </div>
+              </div>
+              <button type="submit" className="btn-primary">Create User</button>
+            </form>
+
+            <div className="user-list">
+              {users.map(listUser => (
+                <div key={listUser.originalUsername} className="user-list-item">
+                  <div className="user-profile-editor">
+                    <label>Username</label>
+                    <input
+                      type="text"
+                      value={listUser.username || ''}
+                      onChange={e => setUsers(users.map(u => u.originalUsername === listUser.originalUsername ? { ...u, username: e.target.value } : u))}
+                    />
+                  </div>
+                  <div className="user-profile-editor">
+                    <label>Role</label>
+                    <select
+                      value={listUser.role || 'user'}
+                      onChange={e => setUsers(users.map(u => u.originalUsername === listUser.originalUsername ? { ...u, role: e.target.value } : u))}
+                    >
+                      <option value="user">User</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                  </div>
+                  <div className="user-profile-editor">
+                    <label>Team</label>
+                    <input
+                      type="text"
+                      value={listUser.team || ''}
+                      placeholder="No team"
+                      onChange={e => setUsers(users.map(u => u.originalUsername === listUser.originalUsername ? { ...u, team: e.target.value } : u))}
+                    />
+                  </div>
+                  <div className="user-profile-editor">
+                    <label>New Password</label>
+                    <input
+                      type="password"
+                      value={listUser.draftPassword || ''}
+                      placeholder="Leave blank"
+                      onChange={e => setUsers(users.map(u => u.originalUsername === listUser.originalUsername ? { ...u, draftPassword: e.target.value } : u))}
+                    />
+                  </div>
+                  <div className="user-row-actions">
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      onClick={() => handleUpdateUser(listUser)}
+                    >
+                      Apply
+                    </button>
+                    <button
+                      className="btn-delete"
+                      onClick={() => handleDeleteUser(listUser.originalUsername)}
+                      disabled={listUser.originalUsername === user.username}
+                    >
+                      X
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
