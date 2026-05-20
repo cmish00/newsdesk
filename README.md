@@ -18,8 +18,7 @@ Grab the [Latest Release](https://github.com/cmish00/newsdesk/releases/latest)
 - Run `docker compose up --build
 
 # Docker Compose
-**Install through a Docker Compose manager like Portainer.**
-[Docker Hub](https://hub.docker.com/repository/docker/cmish00/newsdesk-frontend/) | [Docker Hub](https://hub.docker.com/repository/docker/cmish00/newsdesk-backend/)
+**Install through a Docker Compose manager like Portainer.** | [Docker Hub](https://hub.docker.com/repository/docker/cmish00/newsdesk-frontend/)
 ```
 version: '3.8' 
 # Legacy versioning system | Not needed in most deployments.
