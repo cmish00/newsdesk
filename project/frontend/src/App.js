@@ -144,10 +144,13 @@ function NewsDesk() {
   const [currentPassword, setCurrentPassword] = useState('');
   const [myNewPassword, setMyNewPassword] = useState('');
   const [passwordMessage, setPasswordMessage] = useState('');
+  const [showUserManagement, setShowUserManagement] = useState(false);
+  const [showMyPassword, setShowMyPassword] = useState(false);
 
   // Form States for Creating/Editing Ticker
   const [newTickerId, setNewTickerId] = useState('');
   const [tickerScope, setTickerScope] = useState('team');
+  const [adminTickerTeam, setAdminTickerTeam] = useState('');
   const [badge, setBadge] = useState(''); // Empty badge support
   const [badgeType, setBadgeType] = useState('text');
   const [speed, setSpeed] = useState(20);
@@ -265,6 +268,7 @@ function NewsDesk() {
       body: JSON.stringify({
         id: finalTickerId,
         tickerScope: resolvedTickerScope,
+        adminTeam: user?.role === 'admin' ? adminTickerTeam : undefined,
         badge, badgeType, speed, colorBg, colorText, colorBadgeBg, colorBadgeText, colorRegion, fontFamily
       })
     });
@@ -398,6 +402,27 @@ function NewsDesk() {
     }
   };
 
+  const handleUpdateTickerAssignment = async (ticker, team) => {
+    const res = await authFetch(`${API_BASE}/api/tickers/${ticker.id}/assignment`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ team })
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (activeTickerId === ticker.id) {
+        setActiveTickerId(data.newTickerId);
+        loadHeadlines(data.newTickerId);
+      }
+      loadTickers();
+    } else {
+      const data = await res.json().catch(() => ({ error: 'Unable to update ticker assignment.' }));
+      window.alert(data.error || 'Unable to update ticker assignment.');
+      loadTickers();
+    }
+  };
+
   const handleDeleteUser = async (username) => {
     if (!window.confirm(`Delete user "${username}"?`)) return;
     const res = await authFetch(`${API_BASE}/api/users/${username}`, { method: 'DELETE' });
@@ -432,6 +457,10 @@ function NewsDesk() {
       teamName,
       teamTickers.sort((a, b) => a.id.localeCompare(b.id))
     ]);
+  const availableTeams = Array.from(new Set([
+    ...users.map(listUser => listUser.team),
+    ...tickers.map(ticker => ticker.team)
+  ].filter(Boolean))).sort((a, b) => a.localeCompare(b));
 
   return (
     <div className="news-desk dark-theme">
@@ -460,6 +489,18 @@ function NewsDesk() {
                 <select value={tickerScope} onChange={e => setTickerScope(e.target.value)}>
                   <option value="team">Team Shared ({user.team})</option>
                   <option value="private">Private ({user.username})</option>
+                </select>
+              </div>
+            )}
+
+            {user.role === 'admin' && (
+              <div className="form-group">
+                <label>Ticker Assignment</label>
+                <select value={adminTickerTeam} onChange={e => setAdminTickerTeam(e.target.value)}>
+                  <option value="">Admin / No Team</option>
+                  {availableTeams.map(team => (
+                    <option key={team} value={team}>Team Shared ({team})</option>
+                  ))}
                 </select>
               </div>
             )}
@@ -547,6 +588,24 @@ function NewsDesk() {
                         Speed: {t.speed} | Font: {t.fontFamily}
                         {user.role === 'admin' && t.owner ? ` | Owner: ${t.owner}` : ''}
                       </div>
+                      {(user.role === 'admin' || t.owner === user.username) && (
+                        <div className="ticker-assignment-control" onClick={e => e.stopPropagation()}>
+                          <label>Assignment</label>
+                          <select
+                            value={t.team || ''}
+                            onChange={e => handleUpdateTickerAssignment(t, e.target.value)}
+                          >
+                            <option value="">No Team / Private</option>
+                            {user.role === 'admin' ? (
+                              availableTeams.map(team => (
+                                <option key={team} value={team}>{team}</option>
+                              ))
+                            ) : (
+                              user.team ? <option value={user.team}>{user.team}</option> : null
+                            )}
+                          </select>
+                        </div>
+                      )}
                     </div>
                     <div className="item-actions" onClick={e => e.stopPropagation()}>
                       <button className={t.mode === 'emergency alert' ? 'btn-danger flashing' : 'btn-warn'} onClick={() => toggleEmergency(t.id, t.mode)}>
@@ -652,68 +711,84 @@ function NewsDesk() {
           </section>
         )}
 
-        <section className="desk-card">
-          <h2>My Password</h2>
-          <form onSubmit={handleUpdateOwnPassword} className="compact-form">
-            <div className="form-row">
-              <div className="form-group">
-                <label>Current Password</label>
-                <input
-                  type="password"
-                  value={currentPassword}
-                  onChange={e => setCurrentPassword(e.target.value)}
-                  required
-                />
-              </div>
-              <div className="form-group">
-                <label>New Password</label>
-                <input
-                  type="password"
-                  value={myNewPassword}
-                  onChange={e => setMyNewPassword(e.target.value)}
-                  required
-                />
-              </div>
-            </div>
-            {passwordMessage && <p className="status-text">{passwordMessage}</p>}
-            <button type="submit" className="btn-primary">Update Password</button>
-          </form>
-        </section>
+        {user.role !== 'admin' && (
+          <section className="desk-card">
+            <h2>
+              My Password
+              <button type="button" className="btn-toggle" onClick={() => setShowMyPassword(!showMyPassword)}>
+                {showMyPassword ? 'Collapse' : 'Expand'}
+              </button>
+            </h2>
+            {showMyPassword && (
+              <form onSubmit={handleUpdateOwnPassword} className="compact-form">
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Current Password</label>
+                    <input
+                      type="password"
+                      value={currentPassword}
+                      onChange={e => setCurrentPassword(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>New Password</label>
+                    <input
+                      type="password"
+                      value={myNewPassword}
+                      onChange={e => setMyNewPassword(e.target.value)}
+                      required
+                    />
+                  </div>
+                </div>
+                {passwordMessage && <p className="status-text">{passwordMessage}</p>}
+                <button type="submit" className="btn-primary">Update Password</button>
+              </form>
+            )}
+          </section>
+        )}
 
         {user.role === 'admin' && (
-          <section className="desk-card">
-            <h2>User Management</h2>
-            <form onSubmit={handleCreateUser} className="compact-form">
-              <div className="form-row">
-                <div className="form-group">
-                  <label>Username</label>
-                  <input type="text" value={newUsername} onChange={e => setNewUsername(e.target.value)} required />
-                </div>
-                <div className="form-group">
-                  <label>Password</label>
-                  <input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} required />
-                </div>
-                <div className="form-group">
-                  <label>Role</label>
-                  <select value={newUserRole} onChange={e => setNewUserRole(e.target.value)}>
-                    <option value="user">User</option>
-                    <option value="admin">Admin</option>
-                  </select>
-                </div>
-                <div className="form-group">
-                  <label>Team</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. newsroom"
-                    value={newUserTeam}
-                    onChange={e => setNewUserTeam(e.target.value)}
-                  />
-                </div>
-              </div>
-              <button type="submit" className="btn-primary">Create User</button>
-            </form>
+          <section className="desk-card admin-management-card">
+            <h2>
+              User Management
+              <button type="button" className="btn-toggle" onClick={() => setShowUserManagement(!showUserManagement)}>
+                {showUserManagement ? 'Collapse' : 'Expand'}
+              </button>
+            </h2>
+            {showUserManagement && (
+              <>
+                <form onSubmit={handleCreateUser} className="compact-form">
+                  <div className="form-row">
+                    <div className="form-group">
+                      <label>Username</label>
+                      <input type="text" value={newUsername} onChange={e => setNewUsername(e.target.value)} required />
+                    </div>
+                    <div className="form-group">
+                      <label>Password</label>
+                      <input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} required />
+                    </div>
+                    <div className="form-group">
+                      <label>Role</label>
+                      <select value={newUserRole} onChange={e => setNewUserRole(e.target.value)}>
+                        <option value="user">User</option>
+                        <option value="admin">Admin</option>
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label>Team</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. newsroom"
+                        value={newUserTeam}
+                        onChange={e => setNewUserTeam(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <button type="submit" className="btn-primary">Create User</button>
+                </form>
 
-            <div className="user-list">
+                <div className="user-list">
               {users.map(listUser => (
                 <div key={listUser.originalUsername} className="user-list-item">
                   <div className="user-profile-editor">
@@ -770,7 +845,9 @@ function NewsDesk() {
                   </div>
                 </div>
               ))}
-            </div>
+                </div>
+              </>
+            )}
           </section>
         )}
       </div>

@@ -92,7 +92,8 @@ Promise.all([pubClient.connect(), subClient.connect(), dataClient.connect()]).th
   };
 
   const getTickerTeamForUser = (user, tickerScope = 'team') => {
-    if (user.role === 'admin' || tickerScope === 'private') return '';
+    if (user.role === 'admin') return String(user.adminTeam || '').trim();
+    if (tickerScope === 'private') return '';
     return String(user.team || '').trim();
   };
 
@@ -373,6 +374,63 @@ Promise.all([pubClient.connect(), subClient.connect(), dataClient.connect()]).th
     return migrations;
   };
 
+  const moveTickerToTeam = async (tickerId, newTeam) => {
+    const key = `tickers:${tickerId}`;
+    const ticker = await dataClient.hGetAll(key);
+
+    if (!ticker || !ticker.owner) {
+      throw new Error('Ticker not found.');
+    }
+
+    const owner = await getUser(ticker.owner);
+    const ownerRole = owner?.role || 'user';
+    const ownerTeam = String(ticker.team || '').trim();
+    const targetTeam = String(newTeam || '').trim();
+    const targetScope = targetTeam ? 'team' : 'private';
+    const baseSlug = stripTickerPrefix(tickerId, { username: ticker.owner, team: ownerTeam });
+    const nextTickerId = getTickerIdForUser(
+      baseSlug,
+      { username: ticker.owner, role: ownerRole, team: targetTeam },
+      targetScope
+    );
+
+    if (!nextTickerId) {
+      throw new Error('Ticker ID is required.');
+    }
+
+    if (nextTickerId === tickerId) {
+      await dataClient.hSet(key, 'team', targetTeam);
+      return { oldTickerId: tickerId, newTickerId: tickerId };
+    }
+
+    if (await dataClient.exists(`tickers:${nextTickerId}`)) {
+      throw new Error(`Ticker URL /${nextTickerId} already exists.`);
+    }
+
+    if (await dataClient.exists(`headlines:active:${nextTickerId}`)) {
+      throw new Error(`Headline queue for /${nextTickerId} already exists.`);
+    }
+
+    await dataClient.hSet(`tickers:${nextTickerId}`, {
+      ...ticker,
+      team: targetTeam
+    });
+    await dataClient.del(key);
+
+    if (await dataClient.exists(`headlines:active:${tickerId}`)) {
+      await dataClient.rename(`headlines:active:${tickerId}`, `headlines:active:${nextTickerId}`);
+    }
+
+    const expireKeys = await dataClient.keys(`expire:${tickerId}:*`);
+    for (const expireKey of expireKeys) {
+      const headlineId = expireKey.split(':').slice(2).join(':');
+      await dataClient.rename(expireKey, `expire:${nextTickerId}:${headlineId}`);
+    }
+
+    io.to(`ticker_${tickerId}`).emit('ticker_deleted');
+    return { oldTickerId: tickerId, newTickerId: nextTickerId };
+  };
+
   // Authentication
   app.post('/api/auth/login', async (req, res) => {
     const { username, password } = req.body;
@@ -583,9 +641,12 @@ Promise.all([pubClient.connect(), subClient.connect(), dataClient.connect()]).th
 
   // Create or Update a ticker
   app.post('/api/tickers', requireAuth, async (req, res) => {
-    const { id, badge, badgeType, speed, colorBg, colorText, colorBadgeBg, colorBadgeText, colorRegion, fontFamily, tickerScope } = req.body;
+    const { id, badge, badgeType, speed, colorBg, colorText, colorBadgeBg, colorBadgeText, colorRegion, fontFamily, tickerScope, adminTeam } = req.body;
     const resolvedTickerScope = tickerScope === 'private' ? 'private' : 'team';
-    const tickerId = getTickerIdForUser(id, req.user, resolvedTickerScope);
+    const tickerUser = req.user.role === 'admin'
+      ? { ...req.user, adminTeam }
+      : req.user;
+    const tickerId = getTickerIdForUser(id, tickerUser, resolvedTickerScope);
 
     if (!tickerId || tickerId.endsWith('-')) {
       return res.status(400).json({ error: 'Ticker ID is required.' });
@@ -604,7 +665,7 @@ Promise.all([pubClient.connect(), subClient.connect(), dataClient.connect()]).th
 
     await dataClient.hSet(key, {
       owner: existingOwner || req.user.username,
-      team: existingTeam !== null ? existingTeam : getTickerTeamForUser(req.user, resolvedTickerScope),
+      team: existingTeam !== null ? existingTeam : getTickerTeamForUser(tickerUser, resolvedTickerScope),
       badge: badge !== undefined ? badge : '',
       badgeType: badgeType || 'text',
       speed: speed !== undefined ? String(speed) : '20',
@@ -622,6 +683,36 @@ Promise.all([pubClient.connect(), subClient.connect(), dataClient.connect()]).th
       badge, badgeType, speed: parseInt(speed), mode: currentMode, colorBg, colorText, colorBadgeBg, colorBadgeText, colorRegion, fontFamily
     });
     res.json({ success: true, id: tickerId });
+  });
+
+  app.patch('/api/tickers/:id/assignment', requireAuth, async (req, res) => {
+    const { id } = req.params;
+    const requestedTeam = String(req.body.team || '').trim();
+    const ticker = await dataClient.hGetAll(`tickers:${id}`);
+
+    if (!ticker || !ticker.owner) {
+      return res.status(404).json({ error: 'Ticker not found.' });
+    }
+
+    if (req.user.role !== 'admin') {
+      if (ticker.owner !== req.user.username) {
+        return res.status(403).json({ error: 'Only the ticker owner can change assignment.' });
+      }
+
+      const userTeam = String(req.user.team || '').trim();
+      const allowedTeam = normalizeTeam(requestedTeam) === normalizeTeam(userTeam);
+      if (requestedTeam && (!userTeam || !allowedTeam)) {
+        return res.status(403).json({ error: 'You can only assign tickers to your own team.' });
+      }
+    }
+
+    try {
+      const migration = await moveTickerToTeam(id, requestedTeam);
+      io.emit('tickers_updated');
+      res.json({ success: true, ...migration });
+    } catch (e) {
+      res.status(409).json({ error: e.message });
+    }
   });
 
   // Delete Ticker

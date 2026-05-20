@@ -76,7 +76,7 @@ body.transparent-bg {
 /* Layout Grid */
 .dashboard-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(450px, 100%), 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 2rem;
   align-items: start;
 }
@@ -89,6 +89,10 @@ body.transparent-bg {
   box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
   box-sizing: border-box;
   min-width: 0;
+}
+
+.admin-management-card {
+  grid-column: 1 / -1;
 }
 
 .desk-card h2 {
@@ -176,6 +180,13 @@ button {
 .btn-warn:hover { background: #c05621; }
 .btn-danger { background: #e53e3e; color: white; }
 .btn-delete { background: transparent; font-size: 1.1rem; padding: 0.2rem; }
+.btn-toggle {
+  background: #2d3748;
+  color: #e2e8f0;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.75rem;
+}
+.btn-toggle:hover { background: #4a5568; }
 .btn-reorder {
   background: #2d3748;
   color: #e2e8f0;
@@ -244,6 +255,23 @@ button {
 
 .speed-text { font-size: 0.8rem; color: #a0aec0; margin-top: 0.25rem; }
 .item-actions { display: flex; gap: 0.5rem; }
+
+.ticker-assignment-control {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+
+.ticker-assignment-control label {
+  color: #a0aec0;
+  font-size: 0.75rem;
+}
+
+.ticker-assignment-control select {
+  max-width: 220px;
+  padding: 0.35rem 0.5rem;
+}
 
 .slug-preview {
   color: #90cdf4;
@@ -463,6 +491,10 @@ button {
 
 @media (max-width: 700px) {
   .desk-header {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-grid {
     grid-template-columns: 1fr;
   }
 

@@ -1,7 +1,7 @@
-# WZN Ticker
+# NewsDesk
 A lightweight news-style ticker and management system to generate full-screen webpage-viewable tickers meant to be displayed in streaming softwares like OBS -- But Cute! &lt;3
 
-Grab the [Latest Release](https://github.com/cmish00/WZN-Ticker/releases/latest)
+Grab the [Latest Release](https://github.com/cmish00/newsdesk/releases/latest)
 
 
 # Previews
@@ -11,27 +11,32 @@ Grab the [Latest Release](https://github.com/cmish00/WZN-Ticker/releases/latest)
 ![Cover Image](/assets/images/cover5.gif)
 
 # Installation
+**Install directly on a host machine with Docker previously installed.**
 - Download the required files.
-- Navigate to the `project` folder within the Docker or system CLI.
+- Navigate to the `project` folder within the Docker or System CLI.
 - Set environment variables inside `docker-compose.yml` | Default working values have already been set. This step is optional.
 - Run `docker compose up --build
 
 # Docker Compose
-[Docker Hub](https://hub.docker.com/repository/docker/cmish00/wzn-ticker/)
+**Install through a Docker Compose manager like Portainer.**
+[Docker Hub](https://hub.docker.com/repository/docker/cmish00/newsdesk-frontend/) | [Docker Hub](https://hub.docker.com/repository/docker/cmish00/newsdesk-backend/)
 ```
-version: '3.8'
+version: '3.8' 
+# Legacy versioning system | Not needed in most deployments.
 
 services:
-  redis:
+  redis: 
+  # Persistant Storage Application
     image: redis:7-alpine
     command: redis-server --appendonly yes --notify-keyspace-events Ex
     ports:
       - "6379:6379"
     volumes:
-      - redis_data:/data
+      - path/to/directory/redis_data:/data # ${host/machine/path/redis_data}:data
     restart: unless-stopped
 
-  backend:
+  backend: 
+  # Not Accessed Directly
     build: ./backend
     environment:
       - REDIS_URL=redis://redis:6379
@@ -40,24 +45,26 @@ services:
       - ADMIN_USERNAME=admin
       - ADMIN_PASSWORD=admin
     ports:
-      - "3000:3000"
+      - "3220:3000"
     depends_on:
       - redis
     restart: unless-stopped
 
-  frontend:
+  frontend: 
+  # User Accessible Webpage
     build: ./frontend
     environment:
-      - PANEL_NAME=NEWS DESK
-      - PANEL_DESC=Real-Time Ticker & Queue Control Management System
-      - TAB_Title=Control Panel
+      - PANEL_NAME=NEWS DESK 
+      # This is the main tite seen at the top of the webpage.
+      - PANEL_DESC=Real-Time Ticker & Queue Control Management System 
+      # This is the smaller subtext below the main title.
+      - TAB_Title=Control Panel | News Desk 
+      # This is what appears in your browser's tab.
     ports:
-      - "80:80"
+      - "8220:80" 
+      # This will be forwarded behing a reverse proxy like NGINX or be accessed directly by the end user.
     depends_on:
       - backend
     restart: unless-stopped
-
-volumes:
-  redis_data:
 
 ```
