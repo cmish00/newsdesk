@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --notify-keyspace-events Ex
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - PORT=3000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    environment:
+      - PANEL_NAME=NEWS DESK
+      - PANEL_DESC=Real-Time Ticker & Queue Control Management System
+      - TAB_Title=Control Panel
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  redis_data:
