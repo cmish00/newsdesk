@@ -1,7 +1,7 @@
 # WZN Ticker
 A lightweight news-style ticker and management system to generate full-screen webpage-viewable tickers meant to be displayed in streaming softwares like OBS -- But Cute! &lt;3
 
-Grab the [Latest Release](https://github.com/cmish00/CleosCuteSirens/releases/latest)
+Grab the [Latest Release](https://github.com/cmish00/WZN-Ticker/releases/latest)
 
 
 # Preview Videos
@@ -11,3 +11,53 @@ Grab the [Latest Release](https://github.com/cmish00/CleosCuteSirens/releases/la
 ![Cover Image](/assets/images/cover3.jpg)
 ![Cover Image](/assets/images/cover4.jpg)
 ![Cover Image](/assets/images/cover5.jpg)
+
+# Installation
+- Download the required files.
+- Navigate to the `project` folder within the Docker or system CLI.
+- Set environment variables inside `docker-compose.yml` | Default working values have already been set. This step is optional.
+- Run `docker compose up --build
+
+# Docker Compose
+[Docker Hub](https://hub.docker.com/repository/docker/cmish00/wzn-ticker/)
+```version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --notify-keyspace-events Ex
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - PORT=3000
+      - AUTH_SECRET=wzn_8f6b7a2e4d91c0a73f5e92b1a86d40c9b7e51f3a24dc8e66
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=admin
+    ports:
+      - "3000:3000"
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    environment:
+      - PANEL_NAME=NEWS DESK
+      - PANEL_DESC=Real-Time Ticker & Queue Control Management System
+      - TAB_Title=Control Panel
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+```
