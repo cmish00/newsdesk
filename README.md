@@ -4,13 +4,12 @@ A lightweight news-style ticker and management system to generate full-screen we
 Grab the [Latest Release](https://github.com/cmish00/WZN-Ticker/releases/latest)
 
 
-# Preview Videos
-- [Example Ticker Broadcast](https://youtu.be/uw5eCVIve2E)
-![Cover Image](/assets/images/cover.jpg)
-![Cover Image](/assets/images/cover2.jpg)
-![Cover Image](/assets/images/cover3.jpg)
-![Cover Image](/assets/images/cover4.jpg)
-![Cover Image](/assets/images/cover5.jpg)
+# Previews
+![Cover Image](/assets/images/cover.png)
+![Cover Image](/assets/images/cover2.png)
+![Cover Image](/assets/images/cover3.png)
+![Cover Image](/assets/images/cover4.png)
+![Cover Image](/assets/images/cover5.png)
 
 # Installation
 - Download the required files.
@@ -20,7 +19,8 @@ Grab the [Latest Release](https://github.com/cmish00/WZN-Ticker/releases/latest)
 
 # Docker Compose
 [Docker Hub](https://hub.docker.com/repository/docker/cmish00/wzn-ticker/)
-```version: '3.8'
+```
+version: '3.8'
 
 services:
   redis:
@@ -60,4 +60,5 @@ services:
 
 volumes:
   redis_data:
+
 ```
