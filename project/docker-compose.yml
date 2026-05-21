@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   redis:
     image: redis:7-alpine
@@ -18,6 +16,8 @@ services:
       - AUTH_SECRET=wzn_8f6b7a2e4d91c0a73f5e92b1a86d40c9b7e51f3a24dc8e66
       - ADMIN_USERNAME=admin
       - ADMIN_PASSWORD=admin
+      - FALLBACK_STREAM=[SYSTEM] ALL STATIONS CLEAR // ROTATING TIMELINE STANDBY
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost,http://localhost:80,http://localhost:3000,http://localhost:3001,http://127.0.0.1,http://127.0.0.1:80,http://127.0.0.1:3000,http://127.0.0.1:3001}
     ports:
       - "3000:3000"
     depends_on:
@@ -30,6 +30,7 @@ services:
       - PANEL_NAME=NEWS DESK
       - PANEL_DESC=Real-Time Ticker & Queue Control Management System
       - TAB_Title=Control Panel
+      - FALLBACK_STREAM=[SYSTEM] ALL STATIONS CLEAR // ROTATING TIMELINE STANDBY
     ports:
       - "80:80"
     depends_on:
