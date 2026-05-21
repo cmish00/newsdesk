@@ -36,7 +36,7 @@ services:
 
   backend: 
   # Not Accessed Directly
-    build: ./backend
+    image: cmish00/newsdesk-backend
     environment:
       - REDIS_URL=redis://redis:6379
       - PORT=3000
@@ -51,7 +51,7 @@ services:
 
   frontend: 
   # User Accessible Webpage
-    build: ./frontend
+    image: cmish00/newsdesk-frontend
     environment:
       - PANEL_NAME=NEWS DESK 
       # This is the main title seen at the top of the webpage.
