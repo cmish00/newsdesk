@@ -730,6 +730,11 @@ function NewsDesk() {
     }
   };
 
+  const hasPendingTeamChanges = (team) => {
+    const draftTeam = String(teamDrafts[team] ?? team).trim();
+    return Boolean(draftTeam && draftTeam !== String(team || '').trim());
+  };
+
   const handleDeleteTeam = async (team) => {
     if (!window.confirm(`Delete team "${team}"? Team tickers will move to No Team / Private.`)) return;
 
@@ -1610,11 +1615,16 @@ function NewsDesk() {
                         />
                       </div>
                       <div className="team-management-actions">
-                        <button type="button" className="btn-primary" onClick={() => handleRenameTeam(team)}>
+                        <button
+                          type="button"
+                          className="btn-primary"
+                          onClick={() => handleRenameTeam(team)}
+                          disabled={!hasPendingTeamChanges(team)}
+                        >
                           Apply
                         </button>
-                        <button type="button" className="btn-delete" onClick={() => handleDeleteTeam(team)}>
-                          X
+                        <button type="button" className="btn-primary" onClick={() => handleDeleteTeam(team)}>
+                          Delete Team
                         </button>
                       </div>
                     </div>
