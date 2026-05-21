@@ -26,14 +26,26 @@ const parseAllowedOrigins = (value) => String(value || '')
   .map(origin => origin.trim())
   .filter(Boolean);
 const ALLOWED_CORS_ORIGINS = parseAllowedOrigins(process.env.CORS_ORIGINS || DEFAULT_CORS_ORIGINS.join(','));
-const isAllowedCorsOrigin = (origin) => !origin || ALLOWED_CORS_ORIGINS.includes(origin);
-const corsOptions = {
-  origin(origin, callback) {
-    return callback(null, isAllowedCorsOrigin(origin));
+const getHostname = (value) => {
+  try {
+    return new URL(value.includes('://') ? value : `http://${value}`).hostname;
+  } catch (e) {
+    return '';
   }
 };
+const isSameHostOrigin = (origin, host) => {
+  if (!origin || !host) return false;
+  return getHostname(origin) === getHostname(host);
+};
+const isAllowedRequestOrigin = (req) => {
+  const origin = req.headers.origin;
+  return !origin || ALLOWED_CORS_ORIGINS.includes(origin) || isSameHostOrigin(origin, req.headers.host);
+};
+const corsOptions = (req, callback) => {
+  callback(null, { origin: isAllowedRequestOrigin(req) });
+};
 app.use((req, res, next) => {
-  if (!isAllowedCorsOrigin(req.headers.origin)) {
+  if (!isAllowedRequestOrigin(req)) {
     return res.status(403).json({ error: 'Origin not allowed.' });
   }
   next();
@@ -46,8 +58,12 @@ const dataClient = pubClient.duplicate();
 
 Promise.all([pubClient.connect(), subClient.connect(), dataClient.connect()]).then(async () => {
   const io = new Server(httpServer, {
-    cors: { origin: ALLOWED_CORS_ORIGINS },
-    allowRequest: (req, callback) => callback(null, isAllowedCorsOrigin(req.headers.origin)),
+    cors: {
+      origin(origin, callback) {
+        callback(null, true);
+      }
+    },
+    allowRequest: (req, callback) => callback(null, isAllowedRequestOrigin(req)),
     adapter: createAdapter(pubClient, subClient)
   });
 
@@ -59,8 +75,11 @@ Promise.all([pubClient.connect(), subClient.connect(), dataClient.connect()]).th
   const DEFAULT_FALLBACK_STREAM = process.env.FALLBACK_STREAM || '[SYSTEM] ALL STATIONS CLEAR // ROTATING TIMELINE STANDBY';
   const USERS_INDEX_KEY = 'users:index';
   const TICKERS_INDEX_KEY = 'tickers:index';
+  const TEAMS_INDEX_KEY = 'teams:index';
   const UNASSIGNED_TEAM_KEY = '__unassigned__';
   const UNASSIGNED_TEAM_LABEL = 'Unassigned';
+  const LOGIN_RATE_LIMIT_WINDOW_MS = parseInt(process.env.LOGIN_RATE_LIMIT_WINDOW_MS || '600000', 10);
+  const LOGIN_RATE_LIMIT_MAX_ATTEMPTS = parseInt(process.env.LOGIN_RATE_LIMIT_MAX_ATTEMPTS || '5', 10);
   const isUnassignedTeam = (team) => team === UNASSIGNED_TEAM_KEY ||
     normalizeTeam(team) === normalizeTeam(UNASSIGNED_TEAM_LABEL);
   const getStoredAssignmentTeam = (team) => isUnassignedTeam(team)
@@ -152,6 +171,42 @@ Promise.all([pubClient.connect(), subClient.connect(), dataClient.connect()]).th
 
   const normalizeUsername = (username) => String(username || '').trim().toLowerCase();
   const normalizeTeam = (team) => String(team || '').trim().toLowerCase();
+  const loginAttempts = new Map();
+  const getRequestIp = (req) => String(req.ip || req.socket?.remoteAddress || 'unknown');
+  const getLoginLimitKeys = (req, username) => [
+    `ip:${getRequestIp(req)}`,
+    `user:${normalizeUsername(username)}`
+  ];
+  const pruneLoginAttempts = (now = Date.now()) => {
+    for (const [key, attempt] of loginAttempts.entries()) {
+      if (attempt.resetAt <= now) loginAttempts.delete(key);
+    }
+  };
+  const getLoginRetryAfterSeconds = (req, username) => {
+    const now = Date.now();
+    pruneLoginAttempts(now);
+    const retryAfterMs = getLoginLimitKeys(req, username)
+      .map(key => loginAttempts.get(key))
+      .filter(attempt => attempt && attempt.count >= LOGIN_RATE_LIMIT_MAX_ATTEMPTS)
+      .reduce((maxRetryAfter, attempt) => Math.max(maxRetryAfter, attempt.resetAt - now), 0);
+    return retryAfterMs > 0 ? Math.ceil(retryAfterMs / 1000) : 0;
+  };
+  const recordFailedLoginAttempt = (req, username) => {
+    const now = Date.now();
+    pruneLoginAttempts(now);
+    for (const key of getLoginLimitKeys(req, username)) {
+      const current = loginAttempts.get(key);
+      const nextAttempt = current && current.resetAt > now
+        ? { count: current.count + 1, resetAt: current.resetAt }
+        : { count: 1, resetAt: now + LOGIN_RATE_LIMIT_WINDOW_MS };
+      loginAttempts.set(key, nextAttempt);
+    }
+  };
+  const clearLoginAttempts = (req, username) => {
+    for (const key of getLoginLimitKeys(req, username)) {
+      loginAttempts.delete(key);
+    }
+  };
   const parseTeams = (value, fallbackTeam = '') => {
     let rawTeams = [];
     if (Array.isArray(value)) {
@@ -177,6 +232,38 @@ Promise.all([pubClient.connect(), subClient.connect(), dataClient.connect()]).th
         seen.add(key);
         return true;
       });
+  };
+  const ensureTeams = async (teams) => {
+    const resolvedTeams = parseTeams(teams);
+    if (resolvedTeams.length > 0) {
+      await dataClient.sAdd(TEAMS_INDEX_KEY, resolvedTeams);
+    }
+  };
+  const listTeams = async () => {
+    const teamsByKey = new Map();
+    const addTeam = (team) => {
+      const cleanedTeam = String(team || '').trim();
+      const teamKey = normalizeTeam(cleanedTeam);
+      if (!teamKey || isUnassignedTeam(cleanedTeam) || teamsByKey.has(teamKey)) return;
+      teamsByKey.set(teamKey, cleanedTeam);
+    };
+
+    (await dataClient.sMembers(TEAMS_INDEX_KEY)).forEach(addTeam);
+
+    for (const username of await listUsernames()) {
+      const user = await dataClient.hGetAll(`users:${username}`);
+      getUserTeams(user).forEach(addTeam);
+    }
+
+    for (const tickerId of await listTickerIds()) {
+      const ticker = await dataClient.hGetAll(`tickers:${tickerId}`);
+      if (ticker.unassigned === 'true' || isUnassignedTeam(ticker.team)) continue;
+      addTeam(ticker.team);
+    }
+
+    const teams = Array.from(teamsByKey.values()).sort((a, b) => a.localeCompare(b));
+    await ensureTeams(teams);
+    return teams;
   };
   const getUserTeams = (user) => parseTeams(user.teams, user.team);
   const userHasTeam = (user, team) => {
@@ -256,6 +343,7 @@ Promise.all([pubClient.connect(), subClient.connect(), dataClient.connect()]).th
       teams: JSON.stringify(resolvedTeams),
       createdAt: new Date().toISOString()
     });
+    await ensureTeams(resolvedTeams);
     await dataClient.sAdd(USERS_INDEX_KEY, normalizedUsername);
   };
 
@@ -379,6 +467,7 @@ Promise.all([pubClient.connect(), subClient.connect(), dataClient.connect()]).th
 
   const migrateOwnedTickersForTeamChange = async (username, oldTeam, newTeam, role) => {
     if (role === 'admin') return [];
+    await ensureTeams([newTeam]);
 
     const tickerIds = await listTickerIds();
     const migrations = [];
@@ -516,6 +605,7 @@ Promise.all([pubClient.connect(), subClient.connect(), dataClient.connect()]).th
     const ownerTeam = String(ticker.team || '').trim();
     const targetTeam = getStoredAssignmentTeam(newTeam);
     const isTargetUnassigned = targetTeam === UNASSIGNED_TEAM_KEY;
+    await ensureTeams([targetTeam]);
     const targetScope = targetTeam ? 'team' : 'private';
     const baseSlug = stripTickerPrefix(tickerId, { username: ticker.owner, team: ownerTeam });
     const nextTickerId = getTickerIdForUser(
@@ -635,11 +725,20 @@ Promise.all([pubClient.connect(), subClient.connect(), dataClient.connect()]).th
   // Authentication
   app.post('/api/auth/login', async (req, res) => {
     const { username, password } = req.body;
+    const retryAfterSeconds = getLoginRetryAfterSeconds(req, username);
+    if (retryAfterSeconds > 0) {
+      res.set('Retry-After', String(retryAfterSeconds));
+      return res.status(429).json({ error: 'Too many login attempts. Please try again later.' });
+    }
+
     const user = await getUser(username);
 
     if (!user || !verifyPassword(password || '', user.salt, user.passwordHash)) {
+      recordFailedLoginAttempt(req, username);
       return res.status(401).json({ error: 'Invalid username or password.' });
     }
+
+    clearLoginAttempts(req, username);
 
     const token = signToken({
       username: user.username,
@@ -656,6 +755,127 @@ Promise.all([pubClient.connect(), subClient.connect(), dataClient.connect()]).th
 
   app.get('/api/auth/me', requireAuth, async (req, res) => {
     res.json({ user: req.user });
+  });
+
+  app.get('/api/teams', requireAuth, requireAdmin, async (req, res) => {
+    res.json(await listTeams());
+  });
+
+  app.post('/api/teams', requireAuth, requireAdmin, async (req, res) => {
+    const [team] = parseTeams([req.body.team]);
+    if (!team) {
+      return res.status(400).json({ error: 'Team name is required.' });
+    }
+
+    const teams = await listTeams();
+    if (teams.some(existingTeam => normalizeTeam(existingTeam) === normalizeTeam(team))) {
+      return res.status(409).json({ error: 'Team already exists.' });
+    }
+
+    await ensureTeams([team]);
+    res.json({ success: true, team });
+  });
+
+  app.patch('/api/teams/:team', requireAuth, requireAdmin, async (req, res) => {
+    const oldTeam = String(req.params.team || '').trim();
+    const [newTeam] = parseTeams([req.body.team]);
+
+    if (!oldTeam || isUnassignedTeam(oldTeam)) {
+      return res.status(400).json({ error: 'This team cannot be edited.' });
+    }
+
+    if (!newTeam) {
+      return res.status(400).json({ error: 'Team name is required.' });
+    }
+
+    if (oldTeam === newTeam) {
+      await dataClient.sRem(TEAMS_INDEX_KEY, oldTeam);
+      await ensureTeams([newTeam]);
+      return res.json({ success: true });
+    }
+
+    const teams = await listTeams();
+    if (!teams.some(team => normalizeTeam(team) === normalizeTeam(oldTeam))) {
+      return res.status(404).json({ error: 'Team not found.' });
+    }
+
+    if (
+      normalizeTeam(oldTeam) !== normalizeTeam(newTeam) &&
+      teams.some(team => normalizeTeam(team) === normalizeTeam(newTeam))
+    ) {
+      return res.status(409).json({ error: 'Team already exists.' });
+    }
+
+    const migrations = [];
+    const tickerIds = await listTickerIds();
+
+    try {
+      for (const tickerId of tickerIds) {
+        const ticker = await dataClient.hGetAll(`tickers:${tickerId}`);
+        if (ticker.unassigned === 'true' || normalizeTeam(ticker.team) !== normalizeTeam(oldTeam)) continue;
+        migrations.push(await moveTickerToTeam(tickerId, newTeam));
+      }
+    } catch (e) {
+      return res.status(409).json({ error: e.message });
+    }
+
+    for (const username of await listUsernames()) {
+      const user = await dataClient.hGetAll(`users:${username}`);
+      const updatedTeams = getUserTeams(user).map(team => (
+        normalizeTeam(team) === normalizeTeam(oldTeam) ? newTeam : team
+      ));
+      if (JSON.stringify(updatedTeams) !== JSON.stringify(getUserTeams(user))) {
+        await dataClient.hSet(`users:${username}`, {
+          team: updatedTeams[0] || '',
+          teams: JSON.stringify(updatedTeams)
+        });
+      }
+    }
+
+    await dataClient.sRem(TEAMS_INDEX_KEY, oldTeam);
+    await ensureTeams([newTeam]);
+    io.emit('tickers_updated');
+    res.json({ success: true, migrations });
+  });
+
+  app.delete('/api/teams/:team', requireAuth, requireAdmin, async (req, res) => {
+    const team = String(req.params.team || '').trim();
+    if (!team || isUnassignedTeam(team)) {
+      return res.status(400).json({ error: 'This team cannot be deleted.' });
+    }
+
+    const teams = await listTeams();
+    if (!teams.some(existingTeam => normalizeTeam(existingTeam) === normalizeTeam(team))) {
+      return res.status(404).json({ error: 'Team not found.' });
+    }
+
+    const migrations = [];
+    const tickerIds = await listTickerIds();
+
+    try {
+      for (const tickerId of tickerIds) {
+        const ticker = await dataClient.hGetAll(`tickers:${tickerId}`);
+        if (ticker.unassigned === 'true' || normalizeTeam(ticker.team) !== normalizeTeam(team)) continue;
+        migrations.push(await moveTickerToTeam(tickerId, ''));
+      }
+    } catch (e) {
+      return res.status(409).json({ error: e.message });
+    }
+
+    for (const username of await listUsernames()) {
+      const user = await dataClient.hGetAll(`users:${username}`);
+      const updatedTeams = getUserTeams(user).filter(userTeam => normalizeTeam(userTeam) !== normalizeTeam(team));
+      if (updatedTeams.length !== getUserTeams(user).length) {
+        await dataClient.hSet(`users:${username}`, {
+          team: updatedTeams[0] || '',
+          teams: JSON.stringify(updatedTeams)
+        });
+      }
+    }
+
+    await dataClient.sRem(TEAMS_INDEX_KEY, team);
+    io.emit('tickers_updated');
+    res.json({ success: true, migrations });
   });
 
   app.get('/api/users', requireAuth, requireAdmin, async (req, res) => {
@@ -731,6 +951,7 @@ Promise.all([pubClient.connect(), subClient.connect(), dataClient.connect()]).th
     if (req.body.team !== undefined || req.body.teams !== undefined) {
       updates.team = newTeam;
       updates.teams = JSON.stringify(requestedTeams);
+      await ensureTeams(requestedTeams);
     }
     if (req.body.password) {
       const { salt, hash } = hashPassword(req.body.password);
@@ -927,10 +1148,12 @@ Promise.all([pubClient.connect(), subClient.connect(), dataClient.connect()]).th
     const resolvedFallbackMessage = resolvedFallbackMode === 'blank' ? '' : (fallbackMessage || DEFAULT_FALLBACK_STREAM);
     const currentSortOrder = await dataClient.hGet(key, 'sortOrder');
     const sortOrder = currentSortOrder || String(Date.now());
+    const resolvedTickerTeam = existingTeam !== null ? existingTeam : getTickerTeamForUser(tickerUser, resolvedTickerScope);
+    await ensureTeams([resolvedTickerTeam]);
 
     await dataClient.hSet(key, {
       owner: existingOwner || req.user.username,
-      team: existingTeam !== null ? existingTeam : getTickerTeamForUser(tickerUser, resolvedTickerScope),
+      team: resolvedTickerTeam,
       badge: badge !== undefined ? badge : '',
       badgeType: badgeType || 'text',
       speed: speed !== undefined ? String(speed) : '20',

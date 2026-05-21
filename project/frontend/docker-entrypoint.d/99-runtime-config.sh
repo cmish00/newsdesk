@@ -6,15 +6,18 @@ PANEL_DESC_VALUE=${PANEL_DESC:-Real-Time Ticker & Queue Control Management Syste
 TAB_TITLE_VALUE=${TAB_Title:-CONTROL PANEL}
 FALLBACK_STREAM_VALUE=${FALLBACK_STREAM:-[SYSTEM] ALL STATIONS CLEAR // ROTATING TIMELINE STANDBY}
 
-json_escape() {
-  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
-}
-
-cat > /usr/share/nginx/html/config.js <<EOF
-window.WZN_CONFIG = {
-  PANEL_NAME: "$(json_escape "$PANEL_NAME_VALUE")",
-  PANEL_DESC: "$(json_escape "$PANEL_DESC_VALUE")",
-  TAB_Title: "$(json_escape "$TAB_TITLE_VALUE")",
-  FALLBACK_STREAM: "$(json_escape "$FALLBACK_STREAM_VALUE")"
-};
-EOF
+{
+  printf 'window.WZN_CONFIG = '
+  jq -n \
+    --arg PANEL_NAME "$PANEL_NAME_VALUE" \
+    --arg PANEL_DESC "$PANEL_DESC_VALUE" \
+    --arg TAB_Title "$TAB_TITLE_VALUE" \
+    --arg FALLBACK_STREAM "$FALLBACK_STREAM_VALUE" \
+    '{
+      PANEL_NAME: $PANEL_NAME,
+      PANEL_DESC: $PANEL_DESC,
+      TAB_Title: $TAB_Title,
+      FALLBACK_STREAM: $FALLBACK_STREAM
+    }'
+  printf ';\n'
+} > /usr/share/nginx/html/config.js

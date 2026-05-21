@@ -2,8 +2,14 @@ import React, { useState, useEffect, useRef } from 'react';
 import { BrowserRouter, Routes, Route, useParams, useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
 
-const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:3000' : '';
-const socket = io(window.location.hostname === 'localhost' ? 'http://localhost:3000' : '/');
+const LOCAL_HOSTS = ['localhost', '127.0.0.1', '::1'];
+const isLocalHost = LOCAL_HOSTS.includes(window.location.hostname);
+const isFrontendDevServer = ['3001', '3002', '3003'].includes(window.location.port);
+const backendOrigin = isLocalHost
+  ? 'http://localhost:3000'
+  : `http://${window.location.hostname}:3000`;
+const API_BASE = isLocalHost || isFrontendDevServer ? backendOrigin : '';
+const socket = io(isLocalHost || isFrontendDevServer ? backendOrigin : '/');
 const runtimeConfig = window.WZN_CONFIG || {};
 const PANEL_NAME = runtimeConfig.PANEL_NAME || 'NEWS DESK CONTROL PANEL';
 const PANEL_DESC = runtimeConfig.PANEL_DESC || 'Real-Time Ticker & Queue Control Management System';
@@ -239,15 +245,17 @@ function NewsDesk() {
   const [activeTickerId, setActiveTickerId] = useState('');
   const [tickers, setTickers] = useState([]);
   const [users, setUsers] = useState([]);
+  const [teams, setTeams] = useState([]);
   const [newUsername, setNewUsername] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [newUserRole, setNewUserRole] = useState('user');
   const [newUserTeam, setNewUserTeam] = useState('');
-  const [newUserTeamMode, setNewUserTeamMode] = useState('');
+  const [newTeamName, setNewTeamName] = useState('');
+  const [teamDrafts, setTeamDrafts] = useState({});
   const [currentPassword, setCurrentPassword] = useState('');
   const [myNewPassword, setMyNewPassword] = useState('');
   const [passwordMessage, setPasswordMessage] = useState('');
-  const [showUserManagement, setShowUserManagement] = useState(false);
+  const [showAdminManagement, setShowAdminManagement] = useState(false);
   const [showMyPassword, setShowMyPassword] = useState(false);
   const [showActiveTickers, setShowActiveTickers] = useState(true);
   const [showTickerProfiles, setShowTickerProfiles] = useState(false);
@@ -349,9 +357,25 @@ function NewsDesk() {
       setUsers(data.map(listUser => ({
         ...listUser,
         originalUsername: listUser.username,
+        originalRole: listUser.role || 'user',
+        originalTeams: getTeams(listUser),
         teams: getTeams(listUser),
         draftPassword: ''
       })));
+    } catch (e) { console.error(e); }
+  };
+
+  const loadTeams = async () => {
+    if (user?.role !== 'admin') return;
+    try {
+      const res = await authFetch(`${API_BASE}/api/teams`);
+      const data = await res.json();
+      const assignableTeams = data.filter(team => !isUnassignedTeam(team));
+      setTeams(assignableTeams);
+      setTeamDrafts(assignableTeams.reduce((drafts, team) => ({
+        ...drafts,
+        [team]: drafts[team] || team
+      }), {}));
     } catch (e) { console.error(e); }
   };
 
@@ -363,7 +387,10 @@ function NewsDesk() {
   }, [auth?.token, activeTickerId]);
 
   useEffect(() => {
-    if (auth?.token && user?.role === 'admin') loadUsers();
+    if (auth?.token && user?.role === 'admin') {
+      loadUsers();
+      loadTeams();
+    }
   }, [auth?.token, user?.role]);
 
   useEffect(() => {
@@ -423,13 +450,13 @@ function NewsDesk() {
         fontFamily,
         fallbackMessage: fallbackBlank ? '' : fallbackMessage,
         fallbackMode: fallbackBlank ? 'blank' : (fallbackMessage ? 'custom' : 'default')
-      });
+      }, { force: true });
       loadTickers();
     }
   };
 
-  const populateTickerProfileForm = (ticker) => {
-    if (activeTickerId === ticker.id) {
+  const populateTickerProfileForm = (ticker, options = {}) => {
+    if (!options.force && activeTickerId === ticker.id) {
       resetTickerProfileForm();
       return;
     }
@@ -448,7 +475,7 @@ function NewsDesk() {
     setAdminTickerTeam(tickerTeam);
     setBadge(ticker.badge || '');
     setBadgeType(ticker.badgeType || 'text');
-    setSpeed(parseInt(ticker.speed || '20', 10));
+    setSpeed(parseInt(ticker.speed ?? '20', 10));
     setColorBg(ticker.colorBg || '#141414');
     setColorText(ticker.colorText || '#ffffff');
     setColorBadgeBg(ticker.colorBadgeBg || '#d32f2f');
@@ -637,8 +664,8 @@ function NewsDesk() {
       setNewPassword('');
       setNewUserRole('user');
       setNewUserTeam('');
-      setNewUserTeamMode('');
       loadUsers();
+      loadTeams();
     }
   };
 
@@ -656,10 +683,68 @@ function NewsDesk() {
     if (res.ok) {
       loadUsers();
       loadTickers();
+      loadTeams();
     } else {
       const data = await res.json().catch(() => ({ error: 'Unable to update team.' }));
       window.alert(data.error || 'Unable to update team.');
       loadUsers();
+      loadTeams();
+    }
+  };
+
+  const handleCreateTeam = async (e) => {
+    e.preventDefault();
+    const res = await authFetch(`${API_BASE}/api/teams`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ team: newTeamName })
+    });
+
+    if (res.ok) {
+      setNewTeamName('');
+      loadTeams();
+    } else {
+      const data = await res.json().catch(() => ({ error: 'Unable to create team.' }));
+      window.alert(data.error || 'Unable to create team.');
+    }
+  };
+
+  const handleRenameTeam = async (team) => {
+    const nextTeam = String(teamDrafts[team] || '').trim();
+    if (!nextTeam) return;
+
+    const res = await authFetch(`${API_BASE}/api/teams/${encodeURIComponent(team)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ team: nextTeam })
+    });
+
+    if (res.ok) {
+      loadTeams();
+      loadUsers();
+      loadTickers();
+    } else {
+      const data = await res.json().catch(() => ({ error: 'Unable to update team.' }));
+      window.alert(data.error || 'Unable to update team.');
+      loadTeams();
+    }
+  };
+
+  const handleDeleteTeam = async (team) => {
+    if (!window.confirm(`Delete team "${team}"? Team tickers will move to No Team / Private.`)) return;
+
+    const res = await authFetch(`${API_BASE}/api/teams/${encodeURIComponent(team)}`, {
+      method: 'DELETE'
+    });
+
+    if (res.ok) {
+      loadTeams();
+      loadUsers();
+      loadTickers();
+    } else {
+      const data = await res.json().catch(() => ({ error: 'Unable to delete team.' }));
+      window.alert(data.error || 'Unable to delete team.');
+      loadTeams();
     }
   };
 
@@ -670,9 +755,9 @@ function NewsDesk() {
       if (listUser.originalUsername !== originalUsername) return listUser;
       const existingTeams = getTeams(listUser);
       if (existingTeams.some(existingTeam => existingTeam.toLowerCase() === nextTeam.toLowerCase())) {
-        return { ...listUser, draftTeam: '', draftTeamMode: '' };
+        return { ...listUser, draftTeam: '' };
       }
-      return { ...listUser, teams: [...existingTeams, nextTeam], draftTeam: '', draftTeamMode: '' };
+      return { ...listUser, teams: [...existingTeams, nextTeam], draftTeam: '' };
     }));
   };
 
@@ -682,6 +767,22 @@ function NewsDesk() {
         ? { ...listUser, teams: getTeams(listUser).filter(existingTeam => existingTeam !== team) }
         : listUser
     )));
+  };
+
+  const hasPendingUserChanges = (listUser) => {
+    const normalizeTeamList = (teamList) => teamList
+      .map(team => String(team || '').trim().toLowerCase())
+      .filter(Boolean)
+      .sort();
+    const originalTeams = normalizeTeamList(listUser.originalTeams || []);
+    const currentTeams = normalizeTeamList(getTeams(listUser));
+
+    return (
+      String(listUser.username || '').trim().toLowerCase() !== String(listUser.originalUsername || '').trim().toLowerCase() ||
+      (listUser.role || 'user') !== (listUser.originalRole || 'user') ||
+      JSON.stringify(currentTeams) !== JSON.stringify(originalTeams) ||
+      Boolean(String(listUser.draftPassword || '').trim())
+    );
   };
 
   const handleUpdateOwnPassword = async (e) => {
@@ -776,7 +877,11 @@ function NewsDesk() {
   const handleDeleteUser = async (username) => {
     if (!window.confirm(`Delete user "${username}"?`)) return;
     const res = await authFetch(`${API_BASE}/api/users/${username}`, { method: 'DELETE' });
-    if (res.ok) loadUsers();
+    if (res.ok) {
+      loadUsers();
+      loadTickers();
+      loadTeams();
+    }
   };
 
   const handleLogout = () => {
@@ -785,6 +890,7 @@ function NewsDesk() {
     setActiveTickerId('');
     setTickers([]);
     setUsers([]);
+    setTeams([]);
   };
 
   const toggleTickerTeam = (teamName) => {
@@ -823,6 +929,7 @@ function NewsDesk() {
       })
     ]);
   const availableTeams = Array.from(new Set([
+    ...teams,
     ...users.flatMap(listUser => getTeams(listUser)),
     ...tickers.map(ticker => ticker.team)
   ].filter(Boolean))).sort((a, b) => a.localeCompare(b));
@@ -886,7 +993,7 @@ function NewsDesk() {
                 <label>Ticker Assignment</label>
                 <select value={adminTickerTeam} onChange={e => setAdminTickerTeam(e.target.value)}>
                   <option value="">Admin / No Team</option>
-                  {availableTeams.map(team => (
+                  {userAssignableTeams.map(team => (
                     <option key={team} value={team}>Team Shared ({team})</option>
                   ))}
                 </select>
@@ -1186,6 +1293,11 @@ function NewsDesk() {
           </h2>
           {showActiveTickers && (
             <div className="ticker-list">
+              {sortedTickerGroups.length === 0 && (
+                <div className="manage-feed-empty">
+                  <p className="empty-text">There are no tickers to select. Visit Ticker Profiles to create one.</p>
+                </div>
+              )}
               {sortedTickerGroups.map(([teamName, teamTickers]) => (
                 <div key={teamName} className="ticker-team-group">
                   <button
@@ -1214,7 +1326,7 @@ function NewsDesk() {
                               >
                                 <option value="">No Team / Private</option>
                                 {user.role === 'admin' ? (
-                                  availableTeams.map(team => (
+                                  userAssignableTeams.map(team => (
                                     <option key={team} value={team}>{team}</option>
                                   ))
                                 ) : (
@@ -1322,16 +1434,16 @@ function NewsDesk() {
         {user.role === 'admin' && (
           <section className="desk-card admin-management-card">
             <h2>
-              <button type="button" className="panel-title-toggle" onClick={() => setShowUserManagement(prev => !prev)}>
+              <button type="button" className="panel-title-toggle" onClick={() => setShowAdminManagement(prev => !prev)}>
               👤 User Management
               </button>
               <button type="button" className="btn-toggle" onClick={e => {
-                setShowUserManagement(prev => !prev);
+                setShowAdminManagement(prev => !prev);
               }}>
-                {showUserManagement ? 'Collapse' : 'Expand'}
+                {showAdminManagement ? 'Collapse' : 'Expand'}
               </button>
             </h2>
-            {showUserManagement && (
+            {showAdminManagement && (
               <>
                 <form onSubmit={handleCreateUser} className="compact-form">
                   <div className="form-row">
@@ -1353,27 +1465,14 @@ function NewsDesk() {
                     <div className="form-group">
                       <label>Team</label>
                       <select
-                        value={newUserTeamMode}
-                        onChange={e => {
-                          setNewUserTeamMode(e.target.value);
-                          if (e.target.value !== '__custom__') setNewUserTeam(e.target.value);
-                        }}
+                        value={newUserTeam}
+                        onChange={e => setNewUserTeam(e.target.value)}
                       >
                         <option value="">No team</option>
                         {userAssignableTeams.map(team => (
                           <option key={team} value={team}>{team}</option>
                         ))}
-                        <option className="select-separator-option" value={SELECT_SEPARATOR_VALUE} disabled>{SELECT_SEPARATOR_LABEL}</option>
-                        <option value="__custom__">New / Custom</option>
                       </select>
-                      {newUserTeamMode === '__custom__' && (
-                        <input
-                          type="text"
-                          placeholder="e.g. newsroom"
-                          value={newUserTeam}
-                          onChange={e => setNewUserTeam(e.target.value)}
-                        />
-                      )}
                     </div>
                   </div>
                   <button type="submit" className="btn-primary">Create User</button>
@@ -1400,53 +1499,39 @@ function NewsDesk() {
                       <option value="admin">Admin</option>
                     </select>
                   </div>
-                  <div className="user-profile-editor">
-                    <div className="user-field-heading">
-                    <label>Teams</label>
+                  <div className="user-profile-editor user-teams-editor">
                     <div className="team-chip-list">
                       {getTeams(listUser).length === 0 ? <span className="team-empty">No teams</span> : null}
                       {getTeams(listUser).map(team => (
                         <button
                           key={team}
                           type="button"
-                          className="team-chip"
+                          className={`team-chip ${
+                            (listUser.originalTeams || []).some(originalTeam => originalTeam.toLowerCase() === team.toLowerCase())
+                              ? 'team-chip-applied'
+                              : 'team-chip-unsaved'
+                          }`}
                           onClick={() => removeTeamFromUserDraft(listUser.originalUsername, team)}
                         >
                           {team} ×
                         </button>
                       ))}
                     </div>
-                    </div>
                     <div className="user-team-actions">
+                      <div className="user-field-heading">
+                        <label>Teams</label>
+                      </div>
                       <select
-                        value={listUser.draftTeamMode || ''}
-                        onChange={e => {
-                          const mode = e.target.value;
-                          setUsers(users.map(u => u.originalUsername === listUser.originalUsername ? {
-                            ...u,
-                            draftTeamMode: mode,
-                            draftTeam: mode === '__custom__' ? (u.draftTeam || '') : mode
-                          } : u));
-                        }}
+                        value={listUser.draftTeam || ''}
+                        onChange={e => addTeamToUserDraft(listUser.originalUsername, e.target.value)}
                       >
                         <option value="">Add team</option>
-                        {userAssignableTeams.map(team => (
-                          <option key={team} value={team}>{team}</option>
-                        ))}
-                        <option className="select-separator-option" value={SELECT_SEPARATOR_VALUE} disabled>{SELECT_SEPARATOR_LABEL}</option>
-                        <option value="__custom__">New / Custom</option>
+                        {userAssignableTeams
+                          .filter(team => !getTeams(listUser).some(existingTeam => existingTeam.toLowerCase() === team.toLowerCase()))
+                          .map(team => (
+                            <option key={team} value={team}>{team}</option>
+                          ))}
                       </select>
-                      {listUser.draftTeamMode === '__custom__' && (
-                        <input
-                          type="text"
-                          value={listUser.draftTeam || ''}
-                          placeholder="New team"
-                          onChange={e => setUsers(users.map(u => u.originalUsername === listUser.originalUsername ? { ...u, draftTeam: e.target.value } : u))}
-                        />
-                      )}
-                      <button type="button" className="btn-toggle" onClick={() => addTeamToUserDraft(listUser.originalUsername, listUser.draftTeam)}>
-                        Add
-                      </button>
                     </div>
                   </div>
                   <div className="user-profile-editor">
@@ -1463,21 +1548,79 @@ function NewsDesk() {
                       type="button"
                       className="btn-primary"
                       onClick={() => handleUpdateUser(listUser)}
+                      disabled={!hasPendingUserChanges(listUser)}
                     >
                       Apply
                     </button>
                     <button
-                      className="btn-delete"
+                      type="button"
+                      className="btn-primary"
                       onClick={() => handleDeleteUser(listUser.originalUsername)}
                       disabled={listUser.originalUsername === user.username}
                     >
-                      X
+                      Delete User
                     </button>
                   </div>
                 </div>
               ))}
                 </div>
               </>
+            )}
+          </section>
+        )}
+
+        {user.role === 'admin' && (
+          <section className="desk-card team-management-card">
+            <h2>
+              <button type="button" className="panel-title-toggle" onClick={() => setShowAdminManagement(prev => !prev)}>
+              💼 Team Management
+              </button>
+              <button type="button" className="btn-toggle" onClick={e => {
+                setShowAdminManagement(prev => !prev);
+              }}>
+                {showAdminManagement ? 'Collapse' : 'Expand'}
+              </button>
+            </h2>
+            {showAdminManagement && (
+              <div className="team-management">
+                <form onSubmit={handleCreateTeam} className="compact-form team-create-form">
+                  <div className="form-row">
+                    <div className="form-group">
+                      <label>New Team</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. newsroom"
+                        value={newTeamName}
+                        onChange={e => setNewTeamName(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <button type="submit" className="btn-primary">Create Team</button>
+                </form>
+                <div className="team-management-list">
+                  {userAssignableTeams.length === 0 ? <p className="team-empty">No teams created.</p> : null}
+                  {userAssignableTeams.map(team => (
+                    <div key={team} className="team-management-row">
+                      <div className="form-group">
+                        <label>Team Name</label>
+                        <input
+                          type="text"
+                          value={teamDrafts[team] ?? team}
+                          onChange={e => setTeamDrafts({ ...teamDrafts, [team]: e.target.value })}
+                        />
+                      </div>
+                      <div className="team-management-actions">
+                        <button type="button" className="btn-primary" onClick={() => handleRenameTeam(team)}>
+                          Apply
+                        </button>
+                        <button type="button" className="btn-delete" onClick={() => handleDeleteTeam(team)}>
+                          X
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
           </section>
         )}
