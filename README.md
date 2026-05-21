@@ -25,7 +25,7 @@ version: '3.8'
 
 services:
   redis: 
-  # Persistant Storage Application
+  # Persistent Storage Application
     image: redis:7-alpine
     command: redis-server --appendonly yes --notify-keyspace-events Ex
     ports:
@@ -54,14 +54,16 @@ services:
     build: ./frontend
     environment:
       - PANEL_NAME=NEWS DESK 
-      # This is the main tite seen at the top of the webpage.
+      # This is the main title seen at the top of the webpage.
       - PANEL_DESC=Real-Time Ticker & Queue Control Management System 
       # This is the smaller subtext below the main title.
       - TAB_Title=Control Panel | News Desk 
       # This is what appears in your browser's tab.
+      - FALLBACK_STREAM=[SYSTEM] ALL STATIONS CLEAR // ROTATING TIMELINE STANDBY
+      # This is the message that will scroll across a ticker by default when no headline stories are defined. This can be further customised per-ticker in the editor.
     ports:
       - "8220:80" 
-      # This will be forwarded behing a reverse proxy like NGINX or be accessed directly by the end user.
+      # This will be forwarded behind a reverse proxy like NGINX or be accessed directly by the end user.
     depends_on:
       - backend
     restart: unless-stopped
