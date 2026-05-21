@@ -208,6 +208,20 @@ label {
   gap: 0.75rem;
 }
 
+.label-with-help {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.muted-help-text {
+  color: #718096;
+  font-size: 0.75rem;
+  font-style: italic;
+  text-transform: none;
+}
+
 .inline-check {
   display: inline-flex;
   align-items: center;
@@ -724,10 +738,26 @@ button {
   letter-spacing: 1px;
 }
 
+.ticker-content.continuous-mode {
+  display: inline-flex;
+  animation-name: scroll-continuous;
+  padding-left: 0;
+}
+
 .ticker-content.speed-0 {
   animation-play-state: paused !important;
   animation: none !important;
   padding-left: 2.5rem;
+}
+
+.ticker-sequence {
+  display: inline-block;
+}
+
+.ticker-content.continuous-mode .ticker-sequence {
+  display: inline-flex;
+  gap: 0;
+  padding-right: 0;
 }
 
 .headline-item {
@@ -735,9 +765,27 @@ button {
   display: inline-block;
 }
 
+.ticker-content.continuous-mode .headline-item {
+  margin-right: 0;
+}
+
+.cat-bracket {
+  margin-right: 0.35em;
+}
+
+.ticker-content.continuous-mode .cat-bracket {
+  margin-left: 2.5rem;
+  margin-right: calc(2.5rem - 0.35em);
+}
+
 @keyframes scroll {
   0% { transform: translate3d(0, 0, 0); }
   100% { transform: translate3d(-100%, 0, 0); }
+}
+
+@keyframes scroll-continuous {
+  0% { transform: translate3d(0, 0, 0); }
+  100% { transform: translate3d(-50%, 0, 0); }
 }
 
 /* Broadcast Overrides Mode */

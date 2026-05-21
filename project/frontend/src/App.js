@@ -279,6 +279,7 @@ function NewsDesk() {
   const [fontFamily, setFontFamily] = useState('sans-serif');
   const [fallbackMessage, setFallbackMessage] = useState('');
   const [fallbackBlank, setFallbackBlank] = useState(false);
+  const [continuousMode, setContinuousMode] = useState(false);
 
   // Form States for Headlines
   const [selectedTickerHeadlines, setSelectedTickerHeadlines] = useState([]);
@@ -424,7 +425,7 @@ function NewsDesk() {
         tickerScope: resolvedTickerScope,
         team: user?.role !== 'admin' && resolvedTickerScope === 'team' ? selectedTickerTeam : undefined,
         adminTeam: user?.role === 'admin' ? adminTickerTeam : undefined,
-        badge, badgeType, speed, colorBg, colorText, colorBadgeBg, colorBadgeText, colorRegion, fontFamily, fallbackMessage: fallbackBlank ? '' : fallbackMessage, fallbackMode: fallbackBlank ? 'blank' : undefined
+        badge, badgeType, speed, colorBg, colorText, colorBadgeBg, colorBadgeText, colorRegion, fontFamily, continuousMode, fallbackMessage: fallbackBlank ? '' : fallbackMessage, fallbackMode: fallbackBlank ? 'blank' : undefined
       })
     });
     if (res.ok) {
@@ -448,6 +449,7 @@ function NewsDesk() {
         colorBadgeText,
         colorRegion,
         fontFamily,
+        continuousMode,
         fallbackMessage: fallbackBlank ? '' : fallbackMessage,
         fallbackMode: fallbackBlank ? 'blank' : (fallbackMessage ? 'custom' : 'default')
       }, { force: true });
@@ -482,6 +484,7 @@ function NewsDesk() {
     setColorBadgeText(ticker.colorBadgeText || '#ffffff');
     setColorRegion(ticker.colorRegion || '#ff3333');
     setFontFamily(ticker.fontFamily || 'sans-serif');
+    setContinuousMode(ticker.continuousMode === true || ticker.continuousMode === 'true');
     setFallbackBlank(ticker.fallbackMode === 'blank');
     setFallbackMessage(ticker.fallbackMode === 'blank' ? '' : (ticker.fallbackMessage && ticker.fallbackMessage !== FALLBACK_STREAM ? ticker.fallbackMessage : ''));
   };
@@ -501,6 +504,7 @@ function NewsDesk() {
     setColorBadgeText('#ffffff');
     setColorRegion('#ff3333');
     setFontFamily('sans-serif');
+    setContinuousMode(false);
     setFallbackMessage('');
     setFallbackBlank(false);
     setSelectedTickerHeadlines([]);
@@ -1068,6 +1072,21 @@ function NewsDesk() {
                 disabled={fallbackBlank}
                 onChange={e => setFallbackMessage(e.target.value)}
               />
+            </div>
+
+            <div className="label-with-check section-label">
+              <div className="label-with-help">
+                <label>Playback Mode</label>
+                <span className="muted-help-text">Continuous Mode removes the full cycle blank space between the first and last headline.</span>
+              </div>
+              <label className="inline-check">
+                CONTINUOUS
+                <input
+                  type="checkbox"
+                  checked={continuousMode}
+                  onChange={e => setContinuousMode(e.target.checked)}
+                />
+              </label>
             </div>
 
             <label className="section-label">Colors (Supports: hex, transparent, rgba)</label>
@@ -1644,6 +1663,7 @@ const TickerDisplay = ({ id }) => {
   const [headlines, setHeadlines] = useState([]);
   const tickerContainerRef = useRef(null);
   const tickerContentRef = useRef(null);
+  const tickerSequenceRef = useRef(null);
   const [scrollDistance, setScrollDistance] = useState(0);
 
   const fetchDisplayHeadlines = async () => {
@@ -1681,9 +1701,12 @@ const TickerDisplay = ({ id }) => {
     if (!config) return undefined;
 
     const measureScrollDistance = () => {
-      const content = tickerContentRef.current;
+      const content = config.continuousMode && tickerSequenceRef.current
+        ? tickerSequenceRef.current
+        : tickerContentRef.current;
       if (!content) return;
-      setScrollDistance(content.scrollWidth || content.offsetWidth || 0);
+      const measuredWidth = content.getBoundingClientRect?.().width || content.scrollWidth || content.offsetWidth || 0;
+      setScrollDistance(Math.ceil(measuredWidth));
     };
 
     measureScrollDistance();
@@ -1696,6 +1719,7 @@ const TickerDisplay = ({ id }) => {
     if (resizeObserver) {
       if (tickerContainerRef.current) resizeObserver.observe(tickerContainerRef.current);
       if (tickerContentRef.current) resizeObserver.observe(tickerContentRef.current);
+      if (tickerSequenceRef.current) resizeObserver.observe(tickerSequenceRef.current);
     }
 
     return () => {
@@ -1718,6 +1742,61 @@ const TickerDisplay = ({ id }) => {
   const displayedHeadlines = headlines.filter(hl => hl.priority === (isEmergency ? 'breaking' : 'normal'));
   const fallbackText = config.fallbackMode === 'blank' ? '' : (config.fallbackMessage || FALLBACK_STREAM);
   const fallbackPrefixMatch = fallbackText.match(/^(\[[^\]]+\])\s*(.*)$/);
+  const hasTickerContent = displayedHeadlines.length > 0 || Boolean(fallbackText);
+  const isContinuousMode = Boolean(config.continuousMode) && configuredSpeed > 0 && hasTickerContent;
+  const tickerAnimationStyle = {
+    animationDuration
+  };
+
+  const renderHeadlineText = (text) => {
+    const regionColor = isEmergency ? '#ffea00' : config.colorRegion;
+    return String(text || '').split(/(\[[^\]]+\])/g).map((part, index) => {
+      const bracketMatch = part.match(/^\[([^\]]+)\]$/);
+      if (!bracketMatch) return part;
+
+      return (
+        <span key={`highlight-${index}`} className="headline-inline-region" style={{ color: regionColor }}>
+          {bracketMatch[1]}
+        </span>
+      );
+    });
+  };
+
+  const renderTickerSequence = (repeat = false) => (
+    <span
+      key={repeat ? 'repeat-sequence' : 'primary-sequence'}
+      ref={repeat ? null : tickerSequenceRef}
+      className="ticker-sequence"
+      aria-hidden={repeat ? 'true' : undefined}
+    >
+      {displayedHeadlines.length === 0 ? (
+        <span className="headline-item">
+          {fallbackPrefixMatch ? (
+            <>
+              <span className="cat-bracket" style={{ color: isEmergency ? '#ffea00' : config.colorRegion }}>
+                {fallbackPrefixMatch[1]}
+              </span>
+              {fallbackPrefixMatch[2] ? ` ${fallbackPrefixMatch[2]}` : ''}
+            </>
+          ) : (
+            fallbackText
+          )}
+        </span>
+      ) : (
+        displayedHeadlines.map(hl => (
+          <span key={repeat ? `repeat-${hl.id}` : hl.id} className="headline-item">
+            {hl.category ? (
+              <span className="cat-bracket" style={{ color: isEmergency ? '#ffea00' : config.colorRegion }}>
+                [{hl.category}]
+              </span>
+            ) : null}
+            {hl.category ? " " : ""}
+            {renderHeadlineText(hl.text)}
+          </span>
+        ))
+      )}
+    </span>
+  );
 
   const containerStyle = {
     backgroundColor: isEmergency ? '#b71c1c' : config.colorBg,
@@ -1740,8 +1819,10 @@ const TickerDisplay = ({ id }) => {
           config.badge
         )}
       </div>
-      <div ref={tickerContentRef} className={`ticker-content ${config.speed === 0 ? 'speed-0' : ''}`} style={{ animationDuration }}>
-        {displayedHeadlines.length === 0 && fallbackText ? (
+      <div ref={tickerContentRef} className={`ticker-content ${config.speed === 0 ? 'speed-0' : ''} ${isContinuousMode ? 'continuous-mode' : ''}`} style={tickerAnimationStyle}>
+        {isContinuousMode ? (
+          [renderTickerSequence(false), renderTickerSequence(true)]
+        ) : displayedHeadlines.length === 0 && fallbackText ? (
           <span className="headline-item">
             {fallbackPrefixMatch ? (
               <>
@@ -1763,7 +1844,7 @@ const TickerDisplay = ({ id }) => {
                 </span>
               ) : null}
               {hl.category ? " " : ""}
-              {hl.text}
+              {renderHeadlineText(hl.text)}
             </span>
           ))
         ) : null}

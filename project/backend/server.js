@@ -1062,6 +1062,7 @@ Promise.all([pubClient.connect(), subClient.connect(), dataClient.connect()]).th
         colorBadgeText: ticker.colorBadgeText || '#ffffff',
         colorRegion: ticker.colorRegion || '#ff3333',
         fontFamily: ticker.fontFamily || 'sans-serif',
+        continuousMode: ticker.continuousMode === 'true',
         fallbackMessage: ticker.fallbackMode === 'blank' ? '' : (ticker.fallbackMessage || DEFAULT_FALLBACK_STREAM),
         fallbackMode: ticker.fallbackMode || 'default'
       });
@@ -1105,6 +1106,7 @@ Promise.all([pubClient.connect(), subClient.connect(), dataClient.connect()]).th
         colorBadgeText: data.colorBadgeText || '#ffffff',
         colorRegion: data.colorRegion || '#ff3333',
         fontFamily: data.fontFamily || 'sans-serif',
+        continuousMode: data.continuousMode === 'true',
         fallbackMessage: data.fallbackMode === 'blank' ? '' : (data.fallbackMessage || DEFAULT_FALLBACK_STREAM),
         fallbackMode: data.fallbackMode || 'default'
       });
@@ -1119,7 +1121,7 @@ Promise.all([pubClient.connect(), subClient.connect(), dataClient.connect()]).th
 
   // Create or Update a ticker
   app.post('/api/tickers', requireAuth, async (req, res) => {
-    const { id, badge, badgeType, speed, colorBg, colorText, colorBadgeBg, colorBadgeText, colorRegion, fontFamily, fallbackMessage, fallbackMode, tickerScope, adminTeam, team } = req.body;
+    const { id, badge, badgeType, speed, colorBg, colorText, colorBadgeBg, colorBadgeText, colorRegion, fontFamily, continuousMode, fallbackMessage, fallbackMode, tickerScope, adminTeam, team } = req.body;
     const resolvedTickerScope = tickerScope === 'private' ? 'private' : 'team';
     const requestedTeam = String(team || '').trim();
     if (req.user.role !== 'admin' && resolvedTickerScope === 'team' && requestedTeam && !userHasTeam(req.user, requestedTeam)) {
@@ -1144,6 +1146,7 @@ Promise.all([pubClient.connect(), subClient.connect(), dataClient.connect()]).th
 
     // Check if updating or creating to preserve mode
     const currentMode = await dataClient.hGet(key, 'mode') || 'normal';
+    const resolvedContinuousMode = continuousMode === true || continuousMode === 'true';
     const resolvedFallbackMode = fallbackMode === 'blank' ? 'blank' : (fallbackMessage ? 'custom' : 'default');
     const resolvedFallbackMessage = resolvedFallbackMode === 'blank' ? '' : (fallbackMessage || DEFAULT_FALLBACK_STREAM);
     const currentSortOrder = await dataClient.hGet(key, 'sortOrder');
@@ -1166,6 +1169,7 @@ Promise.all([pubClient.connect(), subClient.connect(), dataClient.connect()]).th
       colorBadgeText: colorBadgeText || '#ffffff',
       colorRegion: colorRegion || '#ff3333',
       fontFamily: fontFamily || 'sans-serif',
+      continuousMode: resolvedContinuousMode ? 'true' : 'false',
       fallbackMessage: resolvedFallbackMessage,
       fallbackMode: resolvedFallbackMode
     });
@@ -1173,7 +1177,7 @@ Promise.all([pubClient.connect(), subClient.connect(), dataClient.connect()]).th
 
     io.emit('tickers_updated');
     io.to(`ticker_${tickerId}`).emit('config_changed', {
-      badge, badgeType, speed: parseInt(speed), mode: currentMode, colorBg, colorText, colorBadgeBg, colorBadgeText, colorRegion, fontFamily, fallbackMessage: resolvedFallbackMessage, fallbackMode: resolvedFallbackMode
+      badge, badgeType, speed: parseInt(speed), mode: currentMode, colorBg, colorText, colorBadgeBg, colorBadgeText, colorRegion, fontFamily, continuousMode: resolvedContinuousMode, fallbackMessage: resolvedFallbackMessage, fallbackMode: resolvedFallbackMode
     });
     res.json({ success: true, id: tickerId });
   });
@@ -1521,6 +1525,7 @@ Promise.all([pubClient.connect(), subClient.connect(), dataClient.connect()]).th
           colorBadgeText: data.colorBadgeText || '#ffffff',
           colorRegion: data.colorRegion || '#ff3333',
           fontFamily: data.fontFamily || 'sans-serif',
+          continuousMode: data.continuousMode === 'true',
           fallbackMessage: data.fallbackMode === 'blank' ? '' : (data.fallbackMessage || DEFAULT_FALLBACK_STREAM),
           fallbackMode: data.fallbackMode || 'default'
         });
