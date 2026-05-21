@@ -654,10 +654,15 @@ button {
   width: 100%;
 }
 
+.queue-edit-form > .form-row {
+  margin-top: 0.75rem;
+}
+
 .queue-edit-actions {
   display: flex;
   gap: 0.5rem;
   justify-content: flex-end;
+  margin-top: 0.75rem;
 }
 
 .empty-text { color: #718096; font-style: italic; text-align: center; margin: 2rem 0; }
